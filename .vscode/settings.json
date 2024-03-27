@@ -1,0 +1,6 @@
+{
+    "DevChat.Language": "zh",
+    "DevChat.PythonForChat": "/usr/bin/python3",
+    "devchat.defaultModel": "gpt-3.5-turbo",
+    "DevChat.PythonForCommands": "/root/.chat/mamba/envs/devchat-commands/bin/python"
+}

@@ -1,0 +1,142 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ingress-validator
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ingress-validator-cr
+rules:
+- apiGroups: ["networking.k8s.io"]
+  resources: ["ingresses"]
+  verbs: ["get", "watch", "list"]
+- apiGroups: ["extensions"]
+  resources: ["ingresses"]
+  verbs: ["get", "watch", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ingress-validator-crb
+subjects:
+- kind: ServiceAccount
+  name: ingress-validator
+  namespace: default
+roleRef:
+  kind: ClusterRole
+  name: ingress-validator-cr
+---
+apiVersion: v1
+data:
+  tls.crt: `cat ingress-validator-tls.crt | base64 -w0`
+  tls.key: `cat ingress-validator-tls.key | base64 -w0`
+kind: Secret
+metadata:
+  name: webhook-secret
+  namespace: default
+type: kubernetes.io/tls
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ingress-validator
+  labels: 
+    app: ingress-validator
+spec:
+  selector:
+    app: ingress-validator
+  ports:
+  - name: ingress-validator
+    port: 443
+    targetPort: webhook
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ingress-validator
+  generateName: ingress-validator-
+  labels:
+    app: ingress-validator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ingress-validator
+  template:
+    metadata:
+      labels:
+        app: ingress-validator
+    spec:
+      serviceAccountName: ingress-validator
+      containers:
+      - name: ingress-validator
+        image: reg.kolla.org/library/ingress-validator:v1.0.0
+        command: ["/ingress-validator"]
+        args:
+        - --tls-cert-file=/secrets/tls.crt
+        - --tls-key-file=/secrets/tls.key
+        - --port=443
+        - --v=2
+        ports:
+        - containerPort: 443
+          name: webhook
+        livenessProbe:
+          httpGet:
+            path: /readyz
+            port: 443
+            scheme: HTTPS
+          initialDelaySeconds: 5
+          periodSeconds: 3
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 443
+            scheme: HTTPS
+          initialDelaySeconds: 5
+          periodSeconds: 3
+        resources:
+          requests:
+            cpu: 500m
+            memory: 500Mi
+          limits:
+            cpu: 500m
+            memory: 500Mi
+        volumeMounts:
+        - name: secret-volume
+          readOnly: true
+          mountPath: "/secrets"
+      volumes:
+      - name: secret-volume
+        secret:
+          secretName: webhook-secret
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: ingress-validator
+webhooks:
+- name: "ingress-validator.default.svc"
+  rules:
+  - apiGroups:   ["networking.k8s.io"]
+    apiVersions: ["v1"]
+    operations:  ["CREATE","UPDATE"]
+    resources:   ["ingresses"]
+    scope:       "Namespaced"
+  - apiGroups:   ["extensions"]
+    apiVersions: ["v1beta1"]
+    operations:  ["CREATE","UPDATE"]
+    resources:   ["ingresses"]
+    scope:       "Namespaced"
+  matchPolicy: Equivalent
+  clientConfig:
+    service:
+      namespace: default
+      name: ingress-validator
+      path: /ingress-validator
+      port: 443
+    caBundle: `cat ca.crt | base64 -w0`
+  admissionReviewVersions: ["v1"]
+  sideEffects: None
+  timeoutSeconds: 5
+  failurePolicy: Fail
